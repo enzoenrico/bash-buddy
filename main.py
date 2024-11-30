@@ -2,37 +2,29 @@ import os
 from typing import List
 from dotenv import load_dotenv
 from langchain.agents import Tool, AgentExecutor, create_openai_tools_agent
-from langchain.agents.format_scratchpad.openai_tools import (
-    format_to_openai_tool_messages,
-)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_xai import ChatXAI
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.memory import ConversationBufferMemory
 
 from langchain_community.vectorstores import FAISS
 
 from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
 from pydantic import SecretStr
 
+# handling website loading & scraping
 from langchain_community.utilities.duckduckgo_search import DuckDuckGoSearchAPIWrapper
 
-from regex import B
+from langchain.document_loaders import AsyncChromiumLoader
+from langchain.document_transformers import Html2TextTransformer
+
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich import print as rprint
-from rich.markdown import Markdown
-import time
 import sys
-
-#########################################
-# add a agent to smart search information online
-# maybe search through duckduck go and parse the content from found pages
-#########################################
 
 
 load_dotenv()
@@ -43,7 +35,7 @@ llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.8)
 
 # prompting for the llm
 template = """
-You're an helpuf assistent chatbox, your user is a zoomer student, going to college, he's 19 and likes:
+You're an helpufull assistent chatbot, your user is a zoomer student, going to college, he's 19 and likes:
 - to be on the internet
 - coding
 - artificial inteligence and machine learning
@@ -69,15 +61,6 @@ agent_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-search_tmp = """
-    Based on the message below, extract the main content from it and return it like a search query to find data on a search engine\n
-    Message: {message}
-"""
-
-search_prompt = ChatPromptTemplate.from_messages(
-    [("system", template), MessagesPlaceholder(variable_name="agent_scratchpad")]
-)
-
 
 def web_search(query: str) -> str:
     """
@@ -100,14 +83,6 @@ def web_search(query: str) -> str:
 
 
 interests: List[str] = []
-
-
-def get_search_query(msg) -> str:
-    """
-    Generate a search query based on a user message
-    """
-    search_chain = {"message": msg} | search_prompt | llm | StrOutputParser()
-    return search_chain.invoke(msg)
 
 
 def end_chat(msg) -> bool:
@@ -156,6 +131,27 @@ def remember(interaction_data: str):
         return False
 
 
+# def access_link(links: List[str]):
+#     """
+#     Access a link passed by the user thorugh a chat conversation and get context based on it
+#     Information of the website is stored in your vector store knowledge base
+#     """
+
+#     website_loader = AsyncChromiumLoader(links)
+#     docs = website_loader.load()
+#     print('loaded docs')
+#     transformer = Html2TextTransformer()
+#     print('transformed docs')
+
+#     transformed_html = transformer.transform_documents(docs)
+
+#     # default process for adding context
+#     split_html = splitter.split_documents(transformed_html)
+#     vector_store.add_documents(split_html)
+#     print('added to vector store')
+#     return transformed_html
+
+
 tool_list = [
     Tool(
         name="web_search",
@@ -172,16 +168,23 @@ tool_list = [
         func=remember,
         description="Based on what the user says, remember interests, hobbies, places, phrases, everything the user says, based on your judgement, store it",
     ),
+    # Tool(
+    #     name="access_link",
+    #     func=access_link,
+    #     description="Access and process content from a list of URLs provided in the conversation, extract relevant information and add it to the context",
+    # ),
 ]
 
 # vector db & loader
 docs = [Document(page_content="FIRST DOCUMENT ")]
+
 # search_res = DuckDuckGoSearchAPIWrapper().run("clima de hoje em curitiba - pr")
 
 # for result in search_res:
 #     docs.append(Document(page_content=result))
 
 splitter = RecursiveCharacterTextSplitter(chunk_size=250, chunk_overlap=50)
+
 splits = splitter.split_documents(docs)
 
 vector_store = FAISS.from_documents(
@@ -200,20 +203,7 @@ def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
 
-#  chat
-
-# chat = (
-#     {
-#         "context": retriever | format_docs,
-#         "question": RunnablePassthrough(),
-#         "messages": lambda: memory_buffer.load_memory_variables({})["messages"],
-#         "agent_scratchpad": lambda x: format_to_openai_tool_messages(x["intermediate_steps"]),
-#     }
-#     | agent_prompt
-#     | llm
-#     | StrOutputParser()
-# )
-
+# agent creation
 agent = create_openai_tools_agent(llm, tool_list, prompt=agent_prompt)
 agent_executor = AgentExecutor(
     tools=tool_list, agent=agent, max_iterations=5, verbose=True
